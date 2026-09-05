@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Patient Intake Triage Assistant</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="shell">
+      <section class="triage-panel">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">PS01 Healthcare</p>
+            <h1>Patient Intake Triage</h1>
+          </div>
+          <span id="statusBadge" class="status">Ready</span>
+        </header>
+
+        <div class="disclaimer">
+          Hackathon prototype only. This does not diagnose or replace clinical judgment.
+          In an emergency, call your local emergency number.
+        </div>
+
+        <section id="messages" class="messages" aria-live="polite"></section>
+
+        <form id="chatForm" class="composer">
+          <textarea id="patientText" rows="3" placeholder="Describe what brings the patient in today..." required></textarea>
+          <button type="submit" id="sendButton">Start</button>
+        </form>
+      </section>
+
+      <aside class="note-panel">
+        <h2>Triage Note</h2>
+        <div id="noteEmpty" class="empty">A structured note will appear after enough intake information is available.</div>
+        <div id="noteContent" class="note hidden"></div>
+      </aside>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>
