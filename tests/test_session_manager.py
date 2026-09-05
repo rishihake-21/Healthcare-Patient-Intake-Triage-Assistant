@@ -293,3 +293,50 @@ def test_later_targeted_severity_correction_overwrites_previous_value():
 
     assert current.severity_0_10 == 8
     assert sources["severity_0_10"] == "followup"
+
+
+def test_keyword_classification_avoids_gemini_extraction_and_followup():
+    manager = SessionManager()
+    manager.gemini = NoGeminiCalls()
+
+    response = manager.create_session("I have fever today")
+
+    assert response.slots.complaint_category == "fever"
+    assert response.next_question == "On a scale from 0 to 10, how severe is it right now?"
+
+
+def test_gemini_extraction_is_last_resort_after_keyword_and_embedding_fail():
+    manager = SessionManager()
+    manager.embedding_index = NoEmbeddingMatch()
+    manager.gemini = LastResortGemini()
+
+    response = manager.create_session("Everything feels wrong and I cannot explain it.")
+
+    assert manager.gemini.extract_calls == 1
+    assert response.slots.complaint_category == "fever"
+    assert response.next_question == "On a scale from 0 to 10, how severe is it right now?"
+
+
+class NoGeminiCalls:
+    def extract_slots(self, *args, **kwargs):
+        raise AssertionError("Gemini extraction should not be called.")
+
+    def generate_followup(self, *args, **kwargs):
+        raise AssertionError("Gemini follow-up generation should not be called.")
+
+    def draft_narrative(self, *args, **kwargs):
+        raise AssertionError("This test should not finalize a note.")
+
+
+class NoEmbeddingMatch:
+    def classify(self, text):
+        return None
+
+
+class LastResortGemini:
+    def __init__(self):
+        self.extract_calls = 0
+
+    def extract_slots(self, *args, **kwargs):
+        self.extract_calls += 1
+        return ExtractedSlots(complaint_category="fever", confidence=0.9)

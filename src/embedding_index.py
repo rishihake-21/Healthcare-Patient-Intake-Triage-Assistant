@@ -28,11 +28,12 @@ class EmbeddingIndex:
         if cache_path.exists():
             with cache_path.open("r", encoding="utf-8") as handle:
                 data = json.load(handle)
-            return cls(data["categories"], np.array(data["vectors"], dtype=float), data.get("vectorizer", "gemini"), client)
+            if not (client.available and data.get("vectorizer") != "gemini"):
+                return cls(data["categories"], np.array(data["vectors"], dtype=float), data.get("vectorizer", "gemini"), client)
 
-        vectorizer = "gemini" if client.available else "lexical"
         texts = [CANONICAL[category] for category in categories]
         vectors = client.embed_batch(texts) if client.available else [lexical_vector(text) for text in texts]
+        vectorizer = "gemini" if client.available and len(vectors[0]) != len(lexical_vector("")) else "lexical"
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         with cache_path.open("w", encoding="utf-8") as handle:
             json.dump(

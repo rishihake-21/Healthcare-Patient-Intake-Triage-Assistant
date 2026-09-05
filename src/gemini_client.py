@@ -2,7 +2,9 @@ import json
 import logging
 import os
 import re
+import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from typing import TypeVar
 
 from dotenv import load_dotenv
@@ -17,6 +19,7 @@ load_dotenv()
 LOGGER = logging.getLogger(__name__)
 GEN_MODEL = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
 EMBED_MODEL = "gemini-embedding-001"
+GEMINI_TIMEOUT_SECONDS = float(os.getenv("GEMINI_TIMEOUT_SECONDS", "8"))
 T = TypeVar("T", bound=BaseModel)
 
 CATEGORIES = {
@@ -89,7 +92,9 @@ VAGUE_ANSWER_PHRASES = [
 
 class GeminiClient:
     def __init__(self) -> None:
-        self.api_key = os.getenv("GEMINI_API_KEY")
+        testing = "pytest" in sys.modules
+        disabled = os.getenv("GEMINI_DISABLE_API") == "1"
+        self.api_key = None if testing or disabled else os.getenv("GEMINI_API_KEY")
         self.client = None
         if self.api_key:
             try:
@@ -215,14 +220,26 @@ class GeminiClient:
     def embed(self, text: str) -> list[float]:
         if not self.client:
             return lexical_vector(text)
-        result = self.client.models.embed_content(model=EMBED_MODEL, contents=text)
-        return list(result.embeddings[0].values)
+        try:
+            result = run_with_timeout(
+                lambda: self.client.models.embed_content(model=EMBED_MODEL, contents=text)
+            )
+            return list(result.embeddings[0].values)
+        except Exception:
+            LOGGER.info("Falling back to lexical embedding.", exc_info=True)
+            return lexical_vector(text)
 
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
         if not self.client:
             return [lexical_vector(text) for text in texts]
-        result = self.client.models.embed_content(model=EMBED_MODEL, contents=texts)
-        return [list(embedding.values) for embedding in result.embeddings]
+        try:
+            result = run_with_timeout(
+                lambda: self.client.models.embed_content(model=EMBED_MODEL, contents=texts)
+            )
+            return [list(embedding.values) for embedding in result.embeddings]
+        except Exception:
+            LOGGER.info("Falling back to lexical category embeddings.", exc_info=True)
+            return [lexical_vector(text) for text in texts]
 
     def _call_structured(self, contents: str, schema: type[T]) -> T:
         if not self.client:
@@ -231,14 +248,16 @@ class GeminiClient:
         last_error: Exception | None = None
         for attempt in range(2):
             try:
-                response = self.client.models.generate_content(
-                    model=GEN_MODEL,
-                    contents=contents,
-                    config={
-                        "response_mime_type": "application/json",
-                        "response_schema": schema,
-                        "temperature": 0.1,
-                    },
+                response = run_with_timeout(
+                    lambda: self.client.models.generate_content(
+                        model=GEN_MODEL,
+                        contents=contents,
+                        config={
+                            "response_mime_type": "application/json",
+                            "response_schema": schema,
+                            "temperature": 0.1,
+                        },
+                    )
                 )
                 parsed = getattr(response, "parsed", None)
                 if isinstance(parsed, schema):
@@ -251,6 +270,18 @@ class GeminiClient:
                 if attempt == 0:
                     time.sleep(0.5)
         raise RuntimeError("Gemini structured call failed.") from last_error
+
+
+def run_with_timeout(callable_obj):
+    executor = ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(callable_obj)
+    try:
+        return future.result(timeout=GEMINI_TIMEOUT_SECONDS)
+    except TimeoutError as exc:
+        future.cancel()
+        raise RuntimeError("Gemini call timed out.") from exc
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
 
 def fallback_extract_slots(text: str, target_slot: str | None = None) -> ExtractedSlots:
