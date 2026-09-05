@@ -32,6 +32,7 @@ class RuleEngine:
                     department=decision["department"],
                     matched_red_flags=matched,
                     rationale_template=rule["rationale_template"],
+                    rule_label=rule.get("label"),
                 )
         return None
 
@@ -61,4 +62,5 @@ class RuleEngine:
             department=decision["department"],
             matched_red_flags=[],
             rationale_template=rule["rationale_template"],
+            rule_label=rule.get("label"),
         )

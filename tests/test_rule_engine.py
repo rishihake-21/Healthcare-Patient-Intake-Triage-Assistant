@@ -6,8 +6,12 @@ from src.rule_engine import RuleEngine
 ROOT = Path(__file__).resolve().parent.parent
 
 
+def load_engine() -> RuleEngine:
+    return RuleEngine.load(ROOT / "data" / "triage_rules.json")
+
+
 def test_chest_pain_red_flag_maps_to_emergency():
-    engine = RuleEngine.load(ROOT / "data" / "triage_rules.json")
+    engine = load_engine()
 
     result = engine.check_immediate_escalation(
         "chest_pain",
@@ -20,16 +24,23 @@ def test_chest_pain_red_flag_maps_to_emergency():
     assert result.department == "Emergency Department"
 
 
-def test_missing_slots_are_union_for_category():
-    engine = RuleEngine.load(ROOT / "data" / "triage_rules.json")
+def test_missing_slots_for_each_category():
+    engine = load_engine()
 
-    missing = engine.missing_slots("injury", {"age": 44, "associated_symptoms": ["cut"]})
+    expected = {
+        "fever": ["age", "associated_symptoms", "duration", "onset", "severity_0_10"],
+        "injury": ["age", "associated_symptoms", "mechanism", "onset", "severity_0_10"],
+        "chest_pain": ["age", "associated_symptoms", "onset", "severity_0_10"],
+        "breathing_difficulty": ["age", "associated_symptoms", "onset", "severity_0_10"],
+        "abdominal_pain": ["age", "associated_symptoms", "duration", "onset", "severity_0_10"],
+    }
 
-    assert missing == ["mechanism", "onset", "severity_0_10"]
+    for category, missing in expected.items():
+        assert engine.missing_slots(category, {}) == missing
 
 
 def test_baseline_rule_cites_real_rule():
-    engine = RuleEngine.load(ROOT / "data" / "triage_rules.json")
+    engine = load_engine()
 
     result = engine.evaluate(
         "fever",
@@ -45,3 +56,20 @@ def test_baseline_rule_cites_real_rule():
     assert result is not None
     assert result.rule_id == "FV-02"
     assert result.urgency_level == "ROUTINE"
+
+
+def test_evaluate_returns_none_when_category_has_no_baseline():
+    engine = RuleEngine(
+        [
+            {
+                "rule_id": "X-01",
+                "category": "custom",
+                "required_slots": [],
+                "escalate_immediately_if": {"any_of_associated_symptoms": ["red"]},
+                "decision": {"urgency_level": "URGENT", "department": "Human Review"},
+                "rationale_template": "Red flag.",
+            }
+        ]
+    )
+
+    assert engine.evaluate("custom", {"associated_symptoms": []}) is None

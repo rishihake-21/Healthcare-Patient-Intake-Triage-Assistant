@@ -33,3 +33,11 @@ def reply(session_id: str, payload: ReplyRequest) -> SessionResponse:
         return manager.reply(session_id, payload.answer)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Session not found") from exc
+
+
+@router.get("/sessions/{session_id}", response_model=SessionResponse)
+def get_session(session_id: str) -> SessionResponse:
+    try:
+        return manager.get(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Session not found") from exc
