@@ -1,0 +1,114 @@
+{
+  "rules": [
+    {
+      "rule_id": "FV-01",
+      "category": "fever",
+      "label": "Fever with neurological or rash red flags",
+      "required_slots": ["onset", "duration", "severity_0_10", "associated_symptoms", "age"],
+      "escalate_immediately_if": {
+        "any_of_associated_symptoms": ["stiff neck", "confusion", "non-blanching rash", "seizure"]
+      },
+      "decision": { "urgency_level": "EMERGENCY", "department": "Emergency Department" },
+      "rationale_template": "Fever with {matched_red_flags} requires immediate clinical assessment.",
+      "source_note": "Simplified red-flag screening concept; not a validated clinical tool."
+    },
+    {
+      "rule_id": "FV-02",
+      "category": "fever",
+      "label": "Fever without listed red flags",
+      "required_slots": ["onset", "duration", "severity_0_10", "associated_symptoms", "age"],
+      "escalate_immediately_if": {},
+      "decision": { "urgency_level": "ROUTINE", "department": "General OPD" },
+      "rationale_template": "Fever without listed red flags can be reviewed in routine outpatient care.",
+      "source_note": "General walk-in fever triage baseline."
+    },
+    {
+      "rule_id": "INJ-01",
+      "category": "injury",
+      "label": "Injury with trauma red flags",
+      "required_slots": ["onset", "mechanism", "severity_0_10", "associated_symptoms", "age"],
+      "escalate_immediately_if": {
+        "any_of_associated_symptoms": ["visible deformity", "uncontrolled bleeding", "unable to bear weight", "loss of consciousness"]
+      },
+      "decision": { "urgency_level": "URGENT", "department": "Emergency / Orthopedics" },
+      "rationale_template": "Injury with {matched_red_flags} needs urgent assessment.",
+      "source_note": "Simplified trauma red-flag screening."
+    },
+    {
+      "rule_id": "INJ-02",
+      "category": "injury",
+      "label": "Minor controlled injury",
+      "required_slots": ["onset", "mechanism", "severity_0_10", "associated_symptoms", "age"],
+      "escalate_immediately_if": {},
+      "decision": { "urgency_level": "ROUTINE", "department": "General OPD" },
+      "rationale_template": "A controlled injury without listed trauma red flags can be reviewed routinely.",
+      "source_note": "General walk-in injury triage baseline."
+    },
+    {
+      "rule_id": "CP-01",
+      "category": "chest_pain",
+      "label": "Chest pain with high-risk symptoms",
+      "required_slots": ["onset", "severity_0_10", "associated_symptoms", "age"],
+      "escalate_immediately_if": {
+        "any_of_associated_symptoms": ["shortness of breath", "sweating", "pain radiating to arm", "fainting", "pressure"]
+      },
+      "decision": { "urgency_level": "EMERGENCY", "department": "Emergency Department" },
+      "rationale_template": "Chest pain with {matched_red_flags} requires immediate emergency review.",
+      "source_note": "Simplified chest-pain red-flag screening."
+    },
+    {
+      "rule_id": "CP-02",
+      "category": "chest_pain",
+      "label": "Chest pain without listed high-risk symptoms",
+      "required_slots": ["onset", "severity_0_10", "associated_symptoms", "age"],
+      "escalate_immediately_if": {},
+      "decision": { "urgency_level": "URGENT", "department": "Emergency Department" },
+      "rationale_template": "Chest pain should receive urgent clinical review even without listed high-risk symptoms.",
+      "source_note": "Conservative walk-in chest-pain triage baseline."
+    },
+    {
+      "rule_id": "BR-01",
+      "category": "breathing_difficulty",
+      "label": "Breathing difficulty with severe red flags",
+      "required_slots": ["onset", "severity_0_10", "associated_symptoms", "age"],
+      "escalate_immediately_if": {
+        "any_of_associated_symptoms": ["blue lips", "unable to speak full sentences", "severe wheezing", "confusion"]
+      },
+      "decision": { "urgency_level": "EMERGENCY", "department": "Emergency Department" },
+      "rationale_template": "Breathing difficulty with {matched_red_flags} requires immediate emergency review.",
+      "source_note": "Simplified respiratory distress red-flag screening."
+    },
+    {
+      "rule_id": "BR-02",
+      "category": "breathing_difficulty",
+      "label": "Breathing difficulty without listed severe red flags",
+      "required_slots": ["onset", "severity_0_10", "associated_symptoms", "age"],
+      "escalate_immediately_if": {},
+      "decision": { "urgency_level": "URGENT", "department": "Emergency / Pulmonology" },
+      "rationale_template": "Breathing difficulty should receive urgent assessment.",
+      "source_note": "Conservative respiratory triage baseline."
+    },
+    {
+      "rule_id": "AB-01",
+      "category": "abdominal_pain",
+      "label": "Abdominal pain with listed red flags",
+      "required_slots": ["onset", "duration", "severity_0_10", "associated_symptoms", "age"],
+      "escalate_immediately_if": {
+        "any_of_associated_symptoms": ["fainting", "blood in stool", "vomiting blood", "rigid abdomen", "pregnant"]
+      },
+      "decision": { "urgency_level": "URGENT", "department": "Emergency / Gastroenterology" },
+      "rationale_template": "Abdominal pain with {matched_red_flags} needs urgent clinical assessment.",
+      "source_note": "Simplified abdominal pain red-flag screening."
+    },
+    {
+      "rule_id": "AB-02",
+      "category": "abdominal_pain",
+      "label": "Abdominal pain without listed red flags",
+      "required_slots": ["onset", "duration", "severity_0_10", "associated_symptoms", "age"],
+      "escalate_immediately_if": {},
+      "decision": { "urgency_level": "SEMI_URGENT", "department": "General OPD / Gastroenterology" },
+      "rationale_template": "Abdominal pain without listed red flags can be reviewed semi-urgently.",
+      "source_note": "General walk-in abdominal pain triage baseline."
+    }
+  ]
+}
