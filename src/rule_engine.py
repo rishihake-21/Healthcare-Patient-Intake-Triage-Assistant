@@ -4,6 +4,18 @@ from pathlib import Path
 from src.schemas import RuleResult
 
 
+RED_FLAG_ALIASES = {
+    "shortness of breath": ["hard to breathe", "trouble breathing", "difficulty breathing", "difficult to breathe", "cannot breathe"],
+    "sweating": ["sweating a lot", "sweaty", "cold sweat", "clammy"],
+    "pain radiating to arm": ["radiating arm pain", "pain spreading to arm", "pain spreading to my arm", "pain going to arm", "pain going to my arm"],
+    "pressure": ["chest pressure", "crushing pain", "chest tightness"],
+    "unable to speak full sentences": ["cannot speak full sentences", "can't speak full sentences", "too breathless to speak"],
+    "loss of consciousness": ["passed out", "blackout", "blacked out"],
+    "unable to bear weight": ["cannot bear weight", "can't bear weight", "cannot stand", "can't stand"],
+    "uncontrolled bleeding": ["bleeding won't stop", "bleeding will not stop", "heavy bleeding"],
+}
+
+
 class RuleEngine:
     def __init__(self, rules: list[dict]):
         self.rules = rules
@@ -20,10 +32,13 @@ class RuleEngine:
         return [rule for rule in self.rules if rule["category"] == category]
 
     def check_immediate_escalation(self, category: str, symptoms: list[str]) -> RuleResult | None:
-        symptom_text = " | ".join(symptoms).lower()
+        symptom_texts = [symptom.lower() for symptom in symptoms]
         for rule in self._rules_for(category):
             flags = rule.get("escalate_immediately_if", {}).get("any_of_associated_symptoms", [])
-            matched = [flag for flag in flags if flag.lower() in symptom_text]
+            matched = [
+                flag for flag in flags
+                if any(red_flag_matches(flag, symptom) for symptom in symptom_texts)
+            ]
             if matched:
                 decision = rule["decision"]
                 return RuleResult(
@@ -70,3 +85,14 @@ class RuleEngine:
             rationale_template=rule["rationale_template"],
             rule_label=rule.get("label"),
         )
+
+
+def red_flag_matches(flag: str, symptom: str) -> bool:
+    canonical = _normalize(flag)
+    normalized_symptom = _normalize(symptom)
+    variants = [canonical, *(_normalize(alias) for alias in RED_FLAG_ALIASES.get(flag.lower(), []))]
+    return any(variant and (variant == normalized_symptom or variant in normalized_symptom) for variant in variants)
+
+
+def _normalize(text: str) -> str:
+    return " ".join(text.lower().replace("'", "").split())

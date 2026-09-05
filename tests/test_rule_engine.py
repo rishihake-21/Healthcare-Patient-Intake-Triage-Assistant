@@ -24,6 +24,27 @@ def test_chest_pain_red_flag_maps_to_emergency():
     assert result.department == "Emergency Department"
 
 
+def test_red_flag_matching_handles_patient_language_variants():
+    engine = load_engine()
+
+    result = engine.check_immediate_escalation(
+        "chest_pain",
+        ["sweating a lot", "hard to breathe", "pain spreading to my arm"],
+    )
+
+    assert result is not None
+    assert result.rule_id == "CP-01"
+    assert result.matched_red_flags == ["shortness of breath", "sweating", "pain radiating to arm"]
+
+
+def test_red_flag_matching_rejects_generic_phrases():
+    engine = load_engine()
+
+    result = engine.check_immediate_escalation("chest_pain", ["arm pain", "tightness"])
+
+    assert result is None
+
+
 def test_red_flag_examples_are_category_specific():
     engine = load_engine()
 

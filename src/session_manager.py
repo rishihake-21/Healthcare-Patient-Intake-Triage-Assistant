@@ -85,9 +85,9 @@ class SessionManager:
             return self._finalize(session, escalation)
 
         missing = self._ordered_missing(session)
-        if missing and session.followup_count < MAX_FOLLOWUPS:
+        target_slot = self._next_unasked_missing(session, missing)
+        if target_slot and session.followup_count < MAX_FOLLOWUPS:
             session.followup_count += 1
-            target_slot = missing[0]
             red_flag_examples = []
             if target_slot == "associated_symptoms":
                 red_flag_examples = self.rule_engine.red_flags_for(session.slots.complaint_category)
@@ -110,6 +110,8 @@ class SessionManager:
     def _ask(self, session: Session, question: str, target_slot: str | None = None) -> SessionResponse:
         session.status = "awaiting_answer"
         session.pending_slot = target_slot
+        if target_slot and target_slot not in session.asked_slots:
+            session.asked_slots.append(target_slot)
         self._add_message(session, "assistant", question)
         self._persist(session)
         return self._response(session, next_question=question)
@@ -139,24 +141,28 @@ class SessionManager:
         target_slot: str | None = None,
     ) -> None:
         for key, value in update.model_dump().items():
-            if target_slot and key != target_slot:
-                continue
+            slot_source = "followup" if key == target_slot else "reported"
             if key == "associated_symptoms":
                 if value:
                     current.associated_symptoms = sorted(set(current.associated_symptoms + value))
-                    slot_sources[key] = source
+                    slot_sources[key] = slot_source
                 elif mentions_no_associated_symptoms(patient_text):
                     current.associated_symptoms = []
-                    slot_sources[key] = source
+                    slot_sources[key] = slot_source
                 continue
             if value not in (None, [], "unclear", 0.0):
                 setattr(current, key, value)
-                slot_sources[key] = source
+                slot_sources[key] = slot_source
 
     def _ordered_missing(self, session: Session) -> list[str]:
         missing = self.rule_engine.missing_slots(session.slots.complaint_category, session.slots.model_dump())
-        missing = [slot for slot in missing if slot not in session.slot_sources]
         return sorted(missing, key=lambda slot: SLOT_ORDER.index(slot) if slot in SLOT_ORDER else len(SLOT_ORDER))
+
+    def _next_unasked_missing(self, session: Session, missing: list[str]) -> str | None:
+        for slot in missing:
+            if slot not in session.asked_slots:
+                return slot
+        return None
 
     def _add_message(self, session: Session, role: str, content: str) -> None:
         message = Message(role=role, content=content)
@@ -174,6 +180,7 @@ class SessionManager:
                 session.followup_count,
                 session.unclear_count,
                 session.pending_slot,
+                session.asked_slots,
                 session.slots.model_dump(),
                 session.slot_sources,
                 session.note.model_dump() if session.note else None,
@@ -207,6 +214,7 @@ class SessionManager:
             followup_count=session_row["followup_count"],
             unclear_count=session_row["unclear_count"],
             pending_slot=session_row["pending_slot"] if "pending_slot" in session_row.keys() else None,
+            asked_slots=json.loads(session_row["asked_slots_json"]) if "asked_slots_json" in session_row.keys() else [],
             transcript=[Message.model_validate(message) for message in record["messages"]],
             slots=ExtractedSlots.model_validate_json(session_row["slots_json"]),
             slot_sources=dict(json.loads(session_row["slot_sources_json"])),

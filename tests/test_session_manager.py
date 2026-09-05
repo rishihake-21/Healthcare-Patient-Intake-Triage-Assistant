@@ -1,7 +1,7 @@
 from src.gemini_client import fallback_extract_slots, sanitize_clinical_text
 from src.gemini_client import fallback_followup
 from src.session_manager import SessionManager
-from src.schemas import ExtractedSlots
+from src.schemas import ExtractedSlots, Session
 
 
 def test_immediate_escalation_short_circuits_with_unknowns():
@@ -28,6 +28,7 @@ def test_unclear_second_turn_escalates_to_human():
     assert second.status == "escalated"
     assert second.triage_note is not None
     assert second.triage_note.urgency_level == "ESCALATE_UNCERTAIN"
+    assert second.triage_note.department is None
     assert second.triage_note.matched_rule_id is None
 
 
@@ -72,6 +73,43 @@ def test_associated_symptom_followup_preserves_all_reported_symptoms():
     assert slots.associated_symptoms == ["fainting", "severe joint pain"]
 
 
+def test_vague_followup_answers_stay_unknown():
+    slots = fallback_extract_slots("I don't know what's wrong", target_slot="associated_symptoms")
+
+    assert slots.associated_symptoms == []
+
+
+def test_unsupported_complaint_stays_unsupported():
+    manager = SessionManager()
+
+    response = manager.create_session("I have a cold.")
+
+    assert response.slots.complaint_category == "unclear"
+    assert response.next_question == (
+        "Can you describe the main symptom: fever, injury, chest pain, breathing difficulty, or abdominal pain?"
+    )
+
+
+def test_followup_source_attribution_is_per_slot():
+    manager = SessionManager()
+    current = ExtractedSlots(complaint_category="chest_pain", confidence=0.75)
+    update = ExtractedSlots(
+        age=29,
+        duration="two days",
+        associated_symptoms=["chest tightness"],
+    )
+    sources = {}
+
+    manager._merge_slots(current, update, sources, "followup", "I'm 29 and I've also had chest tightness for two days.", target_slot="age")
+
+    assert current.age == 29
+    assert current.duration == "two days"
+    assert current.associated_symptoms == ["chest tightness"]
+    assert sources["age"] == "followup"
+    assert sources["duration"] == "reported"
+    assert sources["associated_symptoms"] == "reported"
+
+
 def test_reproduced_fever_flow_does_not_repeat_age_question():
     manager = SessionManager()
 
@@ -94,6 +132,105 @@ def test_reproduced_fever_flow_does_not_repeat_age_question():
     assert fourth.status == "completed"
     assert fourth.triage_note is not None
     assert fourth.triage_note.matched_rule_id == "FV-02"
+
+
+def test_unknown_followup_answer_does_not_repeat_same_question():
+    manager = SessionManager()
+
+    first = manager.create_session("hi, i have 102°F fever today")
+    second = manager.reply(first.session_id, "9")
+    third = manager.reply(first.session_id, "I don't know")
+
+    assert second.next_question is not None
+    assert "confusion" in second.next_question.lower()
+    assert "stiff neck" in second.next_question.lower()
+    assert "seizure" in second.next_question.lower()
+    assert "non-blanching rash" in second.next_question.lower()
+    assert third.next_question is not None
+    assert third.next_question != second.next_question
+
+
+def test_asked_slot_remains_after_valid_answer():
+    manager = SessionManager()
+    session = Session(
+        session_id="test",
+        asked_slots=["severity_0_10"],
+        slots=ExtractedSlots(complaint_category="fever", confidence=0.75),
+    )
+
+    manager._merge_slots(
+        session.slots,
+        ExtractedSlots(severity_0_10=8),
+        {},
+        "followup",
+        "8",
+        target_slot="severity_0_10",
+    )
+
+    assert session.slots.severity_0_10 == 8
+    assert "severity_0_10" in session.asked_slots
+
+
+def test_asked_slot_remains_after_unknown_answer():
+    manager = SessionManager()
+    session = Session(
+        session_id="test",
+        asked_slots=["associated_symptoms"],
+        slots=ExtractedSlots(complaint_category="fever", confidence=0.75),
+    )
+
+    manager._merge_slots(
+        session.slots,
+        fallback_extract_slots("I don't know", target_slot="associated_symptoms"),
+        {},
+        "followup",
+        "I don't know",
+        target_slot="associated_symptoms",
+    )
+
+    assert session.slots.associated_symptoms == []
+    assert "associated_symptoms" in session.asked_slots
+
+
+def test_same_slot_is_never_selected_twice():
+    manager = SessionManager()
+    session = Session(session_id="test", asked_slots=["age"])
+
+    assert manager._next_unasked_missing(session, ["age"]) is None
+
+
+def test_next_missing_unasked_slot_is_selected_after_answering_previous_slot():
+    manager = SessionManager()
+    session = Session(
+        session_id="test",
+        asked_slots=["severity_0_10"],
+        slots=ExtractedSlots(complaint_category="fever", confidence=0.75, severity_0_10=8),
+    )
+
+    assert manager._next_unasked_missing(session, ["severity_0_10", "associated_symptoms", "age"]) == "associated_symptoms"
+
+
+def test_correction_overwrites_without_removing_asked_slot():
+    manager = SessionManager()
+    session = Session(
+        session_id="test",
+        asked_slots=["age"],
+        slots=ExtractedSlots(complaint_category="fever", confidence=0.75, age=29),
+    )
+    sources = {"age": "followup"}
+
+    manager._merge_slots(
+        session.slots,
+        fallback_extract_slots("39", target_slot="age"),
+        sources,
+        "followup",
+        "39",
+        target_slot="age",
+    )
+
+    assert session.slots.age == 39
+    assert sources["age"] == "followup"
+    assert "age" in session.asked_slots
 
 
 def test_category_specific_followup_uses_configured_red_flags_only():
@@ -144,3 +281,15 @@ def test_later_targeted_correction_overwrites_previous_value():
 
     assert current.age == 57
     assert sources["age"] == "followup"
+
+
+def test_later_targeted_severity_correction_overwrites_previous_value():
+    manager = SessionManager()
+    current = ExtractedSlots(complaint_category="fever", confidence=0.75, severity_0_10=5)
+    sources = {"complaint_category": "reported", "severity_0_10": "followup"}
+    update = fallback_extract_slots("8", target_slot="severity_0_10")
+
+    manager._merge_slots(current, update, sources, "followup", "8", target_slot="severity_0_10")
+
+    assert current.severity_0_10 == 8
+    assert sources["severity_0_10"] == "followup"

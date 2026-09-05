@@ -74,6 +74,7 @@ class Session(BaseModel):
     followup_count: int = 0
     unclear_count: int = 0
     pending_slot: str | None = None
+    asked_slots: list[str] = Field(default_factory=list)
     transcript: list[Message] = Field(default_factory=list)
     slots: ExtractedSlots = Field(default_factory=ExtractedSlots)
     slot_sources: dict[str, SlotSource] = Field(default_factory=dict)

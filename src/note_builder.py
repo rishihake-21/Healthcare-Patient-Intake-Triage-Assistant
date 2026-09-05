@@ -1,4 +1,4 @@
-from src.gemini_client import GeminiClient, fallback_narrative, sanitize_clinical_text
+from src.gemini_client import GeminiClient, fallback_uncertain_narrative, sanitize_clinical_text
 from src.schemas import ExtractedSlots, NoteNarrative, RuleResult, TriageNote
 
 
@@ -28,13 +28,7 @@ def build_uncertain_note(
     gemini: GeminiClient,
 ) -> TriageNote:
     reported, established_by_followup = split_slots_by_source(slots, slot_sources)
-    narrative = fallback_narrative(
-        "The available information is incomplete or out of scope, so a human triage reviewer should assess it.",
-        [],
-        reported,
-        established_by_followup,
-        unknowns,
-    )
+    narrative = fallback_uncertain_narrative(reported, established_by_followup, unknowns)
     return TriageNote(
         urgency_level="ESCALATE_UNCERTAIN",
         department=None,

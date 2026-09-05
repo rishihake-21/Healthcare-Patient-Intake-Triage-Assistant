@@ -8,6 +8,7 @@ from typing import TypeVar
 from dotenv import load_dotenv
 from pydantic import BaseModel, ValidationError
 
+from src.rule_engine import RED_FLAG_ALIASES
 from src.schemas import ExtractedSlots, FollowUpQuestion, NoteNarrative
 
 
@@ -49,6 +50,18 @@ RED_FLAG_PHRASES = [
     "pregnant",
 ]
 
+RED_FLAG_VOCABULARY = "\n".join(
+    [
+        "Canonical red-flag vocabulary for associated_symptoms:",
+        "- fever: stiff neck, confusion, non-blanching rash, seizure",
+        "- injury: visible deformity, uncontrolled bleeding, unable to bear weight, loss of consciousness",
+        "- chest_pain: shortness of breath, sweating, pain radiating to arm, fainting, pressure",
+        "- breathing_difficulty: blue lips, unable to speak full sentences, severe wheezing, confusion",
+        "- abdominal_pain: fainting, blood in stool, vomiting blood, rigid abdomen, pregnant",
+        "When patient wording is clearly equivalent, include the canonical phrase in associated_symptoms.",
+    ]
+)
+
 DIAGNOSTIC_TERMS = [
     "appendicitis",
     "asthma attack",
@@ -58,6 +71,19 @@ DIAGNOSTIC_TERMS = [
     "pneumonia",
     "sepsis",
     "stroke",
+]
+
+VAGUE_ANSWER_PHRASES = [
+    "i don't know",
+    "im not sure",
+    "i'm not sure",
+    "nothing specific",
+    "nothing else",
+    "i just feel terrible",
+    "i dont know what's wrong",
+    "i don't know what's wrong",
+    "i do not know what's wrong",
+    "not sure",
 ]
 
 
@@ -88,6 +114,7 @@ class GeminiClient:
             "Return JSON only. Do not diagnose. Use complaint_category only from: fever, "
             "injury, chest_pain, breathing_difficulty, abdominal_pain, unclear. "
             "Use null for unknown fields. Extract associated_symptoms as plain patient-reported phrases. "
+            f"{RED_FLAG_VOCABULARY} "
             "When a target slot is supplied, interpret the latest patient answer primarily as that slot "
             "and do not fill unrelated fields from the older conversation."
         )
@@ -161,6 +188,29 @@ class GeminiClient:
         except Exception:
             LOGGER.info("Falling back to templated narrative.", exc_info=True)
             return fallback_narrative(rationale_template, matched_red_flags, reported, established_by_followup, unknowns)
+
+    def draft_narrative_uncertain(
+        self,
+        reported: dict,
+        established_by_followup: dict,
+        unknowns: list[str],
+    ) -> NoteNarrative:
+        system = (
+            "Draft narrative sections for a triage note where the assistant could not "
+            "confidently match the case to a deterministic triage rule. State plainly "
+            "that a human triage reviewer must assess it. Do not suggest a diagnosis, "
+            "urgency level, or clinical department."
+        )
+        contents = (
+            f"{system}\nReported initially: {reported}\n"
+            f"Established by follow-up: {established_by_followup}\nUnknowns: {unknowns}"
+        )
+        try:
+            narrative = self._call_structured(contents, NoteNarrative)
+            return sanitize_narrative(narrative)
+        except Exception:
+            LOGGER.info("Falling back to templated uncertain narrative.", exc_info=True)
+            return fallback_uncertain_narrative(reported, established_by_followup, unknowns)
 
     def embed(self, text: str) -> list[float]:
         if not self.client:
@@ -264,7 +314,7 @@ def fallback_extract_target_slot(text: str, target_slot: str) -> ExtractedSlots:
         if text.strip():
             values[target_slot] = text.strip()
     elif target_slot == "associated_symptoms":
-        if "no red flags" in lowered or "no other symptoms" in lowered or lowered.strip() in {"none", "nothing else"}:
+        if is_vague_answer(lowered) or "no red flags" in lowered or "no other symptoms" in lowered or lowered.strip() in {"none", "nothing else"}:
             values["associated_symptoms"] = []
         else:
             values["associated_symptoms"] = extract_symptom_phrases(text)
@@ -298,7 +348,7 @@ def extract_temporal_phrase(text: str) -> str:
 
 def extract_symptom_phrases(text: str) -> list[str]:
     lowered = text.lower()
-    if "no red flags" in lowered or "no other symptoms" in lowered:
+    if is_vague_answer(lowered) or "no red flags" in lowered or "no other symptoms" in lowered:
         return []
 
     phrases: list[str] = []
@@ -314,8 +364,16 @@ def extract_symptom_phrases(text: str) -> list[str]:
     for phrase in RED_FLAG_PHRASES:
         if phrase in lowered and phrase not in phrases:
             phrases.append(phrase)
+    for phrase, aliases in RED_FLAG_ALIASES.items():
+        if any(alias in lowered for alias in aliases) and phrase not in phrases:
+            phrases.append(phrase)
 
     return sorted(set(phrases))
+
+
+def is_vague_answer(text: str) -> bool:
+    lowered = text.lower().strip()
+    return any(phrase in lowered for phrase in VAGUE_ANSWER_PHRASES)
 
 
 def fallback_followup(target_slot: str, red_flag_examples: list[str] | None = None) -> str:
@@ -348,6 +406,23 @@ def fallback_narrative(
     return sanitize_narrative(
         NoteNarrative(
             rationale=rationale,
+            reported_vs_established=(
+                f"Initial report: {compact_dict(reported)}. "
+                f"Follow-up established: {compact_dict(established_by_followup)}."
+            ),
+            remaining_unknowns=unknowns,
+        )
+    )
+
+
+def fallback_uncertain_narrative(
+    reported: dict,
+    established_by_followup: dict,
+    unknowns: list[str],
+) -> NoteNarrative:
+    return sanitize_narrative(
+        NoteNarrative(
+            rationale="The assistant could not confidently match the case to a deterministic triage rule. A human triage reviewer must assess it.",
             reported_vs_established=(
                 f"Initial report: {compact_dict(reported)}. "
                 f"Follow-up established: {compact_dict(established_by_followup)}."
