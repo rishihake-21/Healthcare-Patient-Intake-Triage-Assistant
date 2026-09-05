@@ -51,10 +51,15 @@ class SessionManager:
 
     def _handle_turn(self, session: Session, patient_text: str) -> SessionResponse:
         source = "reported" if not any(message.role == "patient" for message in session.transcript) else "followup"
+        target_slot = session.pending_slot if source == "followup" else None
         self._add_message(session, "patient", patient_text)
 
-        extracted = self.gemini.extract_slots(render_transcript(session.transcript))
-        self._merge_slots(session.slots, extracted, session.slot_sources, source, patient_text)
+        extracted = self.gemini.extract_slots(
+            render_transcript(session.transcript),
+            target_slot=target_slot,
+            latest_answer=patient_text,
+        )
+        self._merge_slots(session.slots, extracted, session.slot_sources, source, patient_text, target_slot)
 
         if session.slots.complaint_category == "unclear" or session.slots.confidence < 0.5:
             guessed = self.embedding_index.classify(patient_text)
@@ -83,12 +88,16 @@ class SessionManager:
         if missing and session.followup_count < MAX_FOLLOWUPS:
             session.followup_count += 1
             target_slot = missing[0]
+            red_flag_examples = []
+            if target_slot == "associated_symptoms":
+                red_flag_examples = self.rule_engine.red_flags_for(session.slots.complaint_category)
             question = self.gemini.generate_followup(
                 target_slot,
                 SLOT_DESCRIPTIONS.get(target_slot, target_slot),
                 render_transcript(session.transcript),
+                red_flag_examples=red_flag_examples,
             )
-            return self._ask(session, question.question_text)
+            return self._ask(session, question.question_text, target_slot=target_slot)
 
         if missing:
             return self._escalate_uncertain(session, missing)
@@ -98,8 +107,9 @@ class SessionManager:
             return self._escalate_uncertain(session, [])
         return self._finalize(session, result)
 
-    def _ask(self, session: Session, question: str) -> SessionResponse:
+    def _ask(self, session: Session, question: str, target_slot: str | None = None) -> SessionResponse:
         session.status = "awaiting_answer"
+        session.pending_slot = target_slot
         self._add_message(session, "assistant", question)
         self._persist(session)
         return self._response(session, next_question=question)
@@ -108,12 +118,14 @@ class SessionManager:
         unknowns = self._ordered_missing(session)
         session.note = build_note(result, session.slots, unknowns, session.slot_sources, self.gemini)
         session.status = "completed"
+        session.pending_slot = None
         self._persist(session)
         return self._response(session)
 
     def _escalate_uncertain(self, session: Session, unknowns: list[str]) -> SessionResponse:
         session.note = build_uncertain_note(session.slots, unknowns, session.slot_sources, self.gemini)
         session.status = "escalated"
+        session.pending_slot = None
         self._persist(session)
         return self._response(session)
 
@@ -124,8 +136,11 @@ class SessionManager:
         slot_sources: dict[str, str],
         source: str,
         patient_text: str,
+        target_slot: str | None = None,
     ) -> None:
         for key, value in update.model_dump().items():
+            if target_slot and key != target_slot:
+                continue
             if key == "associated_symptoms":
                 if value:
                     current.associated_symptoms = sorted(set(current.associated_symptoms + value))
@@ -158,6 +173,7 @@ class SessionManager:
                 session.status,
                 session.followup_count,
                 session.unclear_count,
+                session.pending_slot,
                 session.slots.model_dump(),
                 session.slot_sources,
                 session.note.model_dump() if session.note else None,
@@ -190,6 +206,7 @@ class SessionManager:
             status=session_row["status"],
             followup_count=session_row["followup_count"],
             unclear_count=session_row["unclear_count"],
+            pending_slot=session_row["pending_slot"] if "pending_slot" in session_row.keys() else None,
             transcript=[Message.model_validate(message) for message in record["messages"]],
             slots=ExtractedSlots.model_validate_json(session_row["slots_json"]),
             slot_sources=dict(json.loads(session_row["slot_sources_json"])),

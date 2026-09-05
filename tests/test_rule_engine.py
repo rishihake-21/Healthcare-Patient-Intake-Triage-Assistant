@@ -24,6 +24,33 @@ def test_chest_pain_red_flag_maps_to_emergency():
     assert result.department == "Emergency Department"
 
 
+def test_red_flag_examples_are_category_specific():
+    engine = load_engine()
+
+    assert engine.red_flags_for("fever") == ["confusion", "non-blanching rash", "seizure", "stiff neck"]
+    assert "fainting" not in engine.red_flags_for("fever")
+    assert "fainting" in engine.red_flags_for("chest_pain")
+
+
+def test_fever_with_fainting_follows_configured_baseline_rule():
+    engine = load_engine()
+
+    result = engine.evaluate(
+        "fever",
+        {
+            "onset": "yesterday",
+            "severity_0_10": 10,
+            "associated_symptoms": ["fainting"],
+            "age": 29,
+        },
+    )
+
+    assert result is not None
+    assert result.rule_id == "FV-02"
+    assert result.urgency_level == "ROUTINE"
+    assert result.matched_red_flags == []
+
+
 def test_missing_slots_for_each_category():
     engine = load_engine()
 

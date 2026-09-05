@@ -36,6 +36,12 @@ class RuleEngine:
                 )
         return None
 
+    def red_flags_for(self, category: str) -> list[str]:
+        flags: list[str] = []
+        for rule in self._rules_for(category):
+            flags.extend(rule.get("escalate_immediately_if", {}).get("any_of_associated_symptoms", []))
+        return sorted(set(flags))
+
     def missing_slots(self, category: str, slots: dict) -> list[str]:
         required: set[str] = set()
         for rule in self._rules_for(category):

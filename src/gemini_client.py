@@ -77,27 +77,49 @@ class GeminiClient:
     def available(self) -> bool:
         return self.client is not None
 
-    def extract_slots(self, transcript: str) -> ExtractedSlots:
+    def extract_slots(
+        self,
+        transcript: str,
+        target_slot: str | None = None,
+        latest_answer: str | None = None,
+    ) -> ExtractedSlots:
         system = (
             "You extract structured intake facts for a hackathon triage-note assistant. "
             "Return JSON only. Do not diagnose. Use complaint_category only from: fever, "
             "injury, chest_pain, breathing_difficulty, abdominal_pain, unclear. "
-            "Use null for unknown fields. Extract associated_symptoms as plain patient-reported phrases."
+            "Use null for unknown fields. Extract associated_symptoms as plain patient-reported phrases. "
+            "When a target slot is supplied, interpret the latest patient answer primarily as that slot "
+            "and do not fill unrelated fields from the older conversation."
         )
-        contents = f"{system}\n\nTranscript:\n{transcript}"
+        if target_slot:
+            contents = (
+                f"{system}\n\nTarget slot: {target_slot}\n"
+                f"Latest patient answer:\n{latest_answer or ''}\n\nConversation so far:\n{transcript}"
+            )
+        else:
+            contents = f"{system}\n\nTranscript:\n{transcript}"
         try:
             return self._call_structured(contents, ExtractedSlots)
         except Exception:
             LOGGER.info("Falling back to deterministic slot extraction.", exc_info=True)
-            return fallback_extract_slots(transcript)
+            return fallback_extract_slots(latest_answer or transcript, target_slot=target_slot)
 
-    def generate_followup(self, target_slot: str, slot_description: str, transcript: str) -> FollowUpQuestion:
+    def generate_followup(
+        self,
+        target_slot: str,
+        slot_description: str,
+        transcript: str,
+        red_flag_examples: list[str] | None = None,
+    ) -> FollowUpQuestion:
         system = (
             "Write exactly one short, plain-language follow-up question for a patient. "
-            "Ask only for the target slot. Do not diagnose or mention disease names."
+            "Ask only for the target slot. Do not diagnose or mention disease names. "
+            "If red-flag examples are supplied, use only those examples; do not add other examples."
         )
+        examples_text = ", ".join(red_flag_examples or [])
         contents = (
             f"{system}\nTarget slot: {target_slot}\nSlot meaning: {slot_description}\n"
+            f"Configured red-flag examples for this complaint: {examples_text or 'none'}\n"
             f"Transcript:\n{transcript}"
         )
         try:
@@ -108,7 +130,10 @@ class GeminiClient:
             )
         except Exception:
             LOGGER.info("Falling back to templated follow-up.", exc_info=True)
-            return FollowUpQuestion(target_slot=target_slot, question_text=fallback_followup(target_slot))
+            return FollowUpQuestion(
+                target_slot=target_slot,
+                question_text=fallback_followup(target_slot, red_flag_examples),
+            )
 
     def draft_narrative(
         self,
@@ -178,13 +203,17 @@ class GeminiClient:
         raise RuntimeError("Gemini structured call failed.") from last_error
 
 
-def fallback_extract_slots(text: str) -> ExtractedSlots:
+def fallback_extract_slots(text: str, target_slot: str | None = None) -> ExtractedSlots:
     patient_text = "\n".join(
         line.split(":", 1)[1].strip()
         for line in text.splitlines()
         if line.lower().startswith("patient:") and ":" in line
     ) or text
     lowered = patient_text.lower()
+
+    if target_slot:
+        return fallback_extract_target_slot(patient_text, target_slot)
+
     category = "unclear"
     for candidate, keywords in CATEGORIES.items():
         if any(keyword in lowered for keyword in keywords):
@@ -205,11 +234,13 @@ def fallback_extract_slots(text: str) -> ExtractedSlots:
     if "no red flags" in lowered or "no other symptoms" in lowered:
         symptoms = []
 
+    temporal_phrase = extract_temporal_phrase(patient_text)
+
     return ExtractedSlots(
         complaint_category=category,
         confidence=0.75 if category != "unclear" else 0.0,
-        onset=patient_text if any(word in lowered for word in ["today", "yesterday", "since", "started", "sudden"]) else None,
-        duration=patient_text if any(word in lowered for word in ["day", "hour", "week", "since", "yesterday"]) else None,
+        onset=temporal_phrase if any(word in lowered for word in ["today", "yesterday", "since", "started", "sudden"]) else None,
+        duration=temporal_phrase if any(word in lowered for word in ["day", "hour", "week", "since", "yesterday"]) else None,
         severity_0_10=severity,
         associated_symptoms=symptoms,
         age=age,
@@ -217,10 +248,84 @@ def fallback_extract_slots(text: str) -> ExtractedSlots:
     )
 
 
-def fallback_followup(target_slot: str) -> str:
+def fallback_extract_target_slot(text: str, target_slot: str) -> ExtractedSlots:
+    lowered = text.lower()
+    values: dict = {}
+
+    if target_slot == "age":
+        age = extract_number(text)
+        if age is not None:
+            values["age"] = age
+    elif target_slot == "severity_0_10":
+        severity = extract_number(text)
+        if severity is not None and 0 <= severity <= 10:
+            values["severity_0_10"] = severity
+    elif target_slot in {"onset", "duration", "mechanism", "relevant_history"}:
+        if text.strip():
+            values[target_slot] = text.strip()
+    elif target_slot == "associated_symptoms":
+        if "no red flags" in lowered or "no other symptoms" in lowered or lowered.strip() in {"none", "nothing else"}:
+            values["associated_symptoms"] = []
+        else:
+            values["associated_symptoms"] = extract_symptom_phrases(text)
+
+    return ExtractedSlots(**values)
+
+
+def extract_number(text: str) -> int | None:
+    match = re.search(r"\b(\d{1,3})\b", text)
+    if not match:
+        return None
+    value = int(match.group(1))
+    return value if 0 <= value <= 130 else None
+
+
+def extract_temporal_phrase(text: str) -> str:
+    lowered = text.lower()
+    for phrase in ["today", "yesterday", "this morning", "this evening", "sudden"]:
+        if phrase in lowered:
+            return phrase
+    since_match = re.search(r"\bsince\s+([^,.]+)", text, flags=re.IGNORECASE)
+    if since_match:
+        return since_match.group(0).strip()
+    duration_match = re.search(
+        r"\b(?:\d+\s+)?(?:hour|hours|day|days|week|weeks|month|months)\b",
+        text,
+        flags=re.IGNORECASE,
+    )
+    return duration_match.group(0).strip() if duration_match else text.strip()
+
+
+def extract_symptom_phrases(text: str) -> list[str]:
+    lowered = text.lower()
+    if "no red flags" in lowered or "no other symptoms" in lowered:
+        return []
+
+    phrases: list[str] = []
+    for part in re.split(r"\s*(?:,|;|\band\b)\s*", lowered):
+        cleaned = part.strip(" .")
+        if not cleaned:
+            continue
+        cleaned = re.sub(r"^(?:i have|i am having|having|with|and)\s+", "", cleaned)
+        cleaned = cleaned.strip(" .")
+        if cleaned:
+            phrases.append(cleaned)
+
+    for phrase in RED_FLAG_PHRASES:
+        if phrase in lowered and phrase not in phrases:
+            phrases.append(phrase)
+
+    return sorted(set(phrases))
+
+
+def fallback_followup(target_slot: str, red_flag_examples: list[str] | None = None) -> str:
+    examples = ", ".join(red_flag_examples or [])
+    symptom_question = "Are there any other symptoms?"
+    if examples:
+        symptom_question = f"Are there any other symptoms, such as {examples}?"
     questions = {
         "age": "How old is the patient?",
-        "associated_symptoms": "Are there any other symptoms or red flags, such as fainting, confusion, severe breathing trouble, unusual bleeding, or pain spreading elsewhere?",
+        "associated_symptoms": symptom_question,
         "duration": "How long has this been going on?",
         "mechanism": "How did the injury happen?",
         "onset": "When did this start?",

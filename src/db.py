@@ -18,6 +18,7 @@ def init_db(path: Path) -> None:
                 status TEXT NOT NULL,
                 followup_count INTEGER NOT NULL DEFAULT 0,
                 unclear_count INTEGER NOT NULL DEFAULT 0,
+                pending_slot TEXT,
                 slots_json TEXT NOT NULL,
                 slot_sources_json TEXT NOT NULL,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -27,6 +28,7 @@ def init_db(path: Path) -> None:
         )
         _ensure_column(conn, "sessions", "followup_count", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "sessions", "unclear_count", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "sessions", "pending_slot", "TEXT")
         _ensure_column(conn, "sessions", "slot_sources_json", "TEXT NOT NULL DEFAULT '{}'")
         conn.execute(
             """
@@ -66,6 +68,7 @@ def upsert_session(
     status: str,
     followup_count: int,
     unclear_count: int,
+    pending_slot: str | None,
     slots: dict[str, Any],
     slot_sources: dict[str, str],
 ) -> None:
@@ -73,13 +76,14 @@ def upsert_session(
         conn.execute(
             """
             INSERT INTO sessions (
-                session_id, status, followup_count, unclear_count, slots_json, slot_sources_json
+                session_id, status, followup_count, unclear_count, pending_slot, slots_json, slot_sources_json
             )
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(session_id) DO UPDATE SET
                 status=excluded.status,
                 followup_count=excluded.followup_count,
                 unclear_count=excluded.unclear_count,
+                pending_slot=excluded.pending_slot,
                 slots_json=excluded.slots_json,
                 slot_sources_json=excluded.slot_sources_json,
                 updated_at=CURRENT_TIMESTAMP
@@ -89,6 +93,7 @@ def upsert_session(
                 status,
                 followup_count,
                 unclear_count,
+                pending_slot,
                 json.dumps(slots),
                 json.dumps(slot_sources),
             ),
@@ -143,11 +148,12 @@ def save_full_session(
     status: str,
     followup_count: int,
     unclear_count: int,
+    pending_slot: str | None,
     slots: dict[str, Any],
     slot_sources: dict[str, str],
     note: dict[str, Any] | None,
 ) -> None:
-    upsert_session(session_id, status, followup_count, unclear_count, slots, slot_sources)
+    upsert_session(session_id, status, followup_count, unclear_count, pending_slot, slots, slot_sources)
     if note is not None:
         write_triage_note(session_id, note)
 
